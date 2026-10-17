@@ -52,7 +52,7 @@
     "configuration": {
       "title": "NoteSmith",
       "properties": {
-        "notesmith.apiBase": { "type": "string", "default": "https://notesmith.io", "description": "NoteSmith server URL." },
+        "notesmith.apiBase": { "type": "string", "default": "https://notesmith.io", "scope": "machine", "description": "NoteSmith server URL. Machine-scoped so a cloned repo can't redirect your API key elsewhere." },
         "notesmith.workspaceId": { "type": "string", "scope": "resource", "description": "Linked NoteSmith workspace (set by “Link NoteSmith Folder”)." },
         "notesmith.folderId": { "type": "string", "scope": "resource", "description": "Linked NoteSmith folder (set by “Link NoteSmith Folder”)." },
         "notesmith.vaultFolderId": { "type": "string", "scope": "resource", "description": "Linked vault folder (set by “Link Local Vault”). The vault's disk path is stored per machine, not here." },
