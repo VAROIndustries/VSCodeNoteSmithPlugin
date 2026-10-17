@@ -60,7 +60,8 @@ async function wrap(dek, secret, iters) {
 
   // bold+code must not grow asterisks on each round trip (server converter bug)
   assert.ok(md.roundTrips("**Push to `master` now.** Then **`deploy.sh`** runs."));
-  assert.deepStrictEqual(md.unsafeMarkdown("**A **`**master**`** b**"), ["bold code"]); // mangled server output
+  assert.ok(md.roundTrips("Intro\n\n---\n\nKeep me\n\n---\n\nEnd")); // two rules aren't frontmatter
+  assert.ok(md.roundTrips("1. **Item.** text\n   - nested\n2. Next")); // ordered sub-list stays nested
 
   fs.rmSync(dir, { recursive: true });
   console.log("ok");

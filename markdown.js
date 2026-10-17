@@ -1,4 +1,4 @@
-// TipTap JSON <-> Markdown. Vendored 2026-10-17 from NoteSmith:
+// TipTap JSON <-> Markdown. Vendored 2026-10-17 from NoteSmith (as of commit b8d7cd0):
 //   apps/web/src/lib/tiptapToMarkdown.ts   (tiptapToMarkdown)
 //   apps/web/src/lib/import.ts             (markdownToTiptapJson + token walkers)
 //   apps/web/src/lib/safeHref.ts           (safeImportHref)
@@ -9,50 +9,60 @@ const { marked } = require("marked");
 // ---------------------------------------------------------------- TipTap -> Markdown
 const MAX_DEPTH = 100;
 const MAX_HEADING_LEVEL = 6;
-const MAX_LIST_INDENT = 16;
+const MAX_LIST_INDENT = 32;
 
-// Diverges from the server on purpose: `code` must be the innermost mark. The server applies
-// marks in stored order, so bold+code text comes out as `**x**` inside backticks, which
-// re-parses as literal asterisks and grows by four more on every round trip.
-function applyMarks(text, marks) {
-  for (const mark of [...marks].sort((a, b) => (b.type === "code") - (a.type === "code"))) {
-    if (mark.type === "bold") text = `**${text}**`;
-    else if (mark.type === "italic") text = `*${text}*`;
-    else if (mark.type === "strike") text = `~~${text}~~`;
-    else if (mark.type === "code") text = `\`${text}\``;
-    else if (mark.type === "link") text = `[${text}](${mark.attrs?.href ?? ""})`;
+// code is always innermost (leaf); the rest wrap whole runs of nodes — see the server's
+// tiptapToMarkdown.ts for why per-node marks compounded on every round trip.
+const RUN_MARKS = new Set(["link", "bold", "italic", "strike"]);
+const sameMark = (a, b) => a.type === b.type && (a.type !== "link" || a.attrs?.href === b.attrs?.href);
+
+function wrapMark(inner, mark) {
+  if (mark.type === "link") return `[${inner}](${mark.attrs?.href ?? ""})`;
+  const d = mark.type === "bold" ? "**" : mark.type === "italic" ? "*" : "~~";
+  const [, lead, core, trail] = inner.match(/^(\s*)([\s\S]*?)(\s*)$/);
+  return core ? lead + d + core + d + trail : inner;
+}
+
+function leaf(node, depth) {
+  if (node.type === "text") return node.marks?.some((m) => m.type === "code") ? "`" + (node.text ?? "") + "`" : node.text ?? "";
+  if (node.type === "hardBreak") return "  \n";
+  if (node.type === "mention") {
+    const label = node.attrs?.label ?? node.attrs?.id ?? "";
+    return label ? "@" + label : "";
   }
-  return text;
+  return inlineNodes(node.content ?? [], depth + 1);
 }
 
 function inlineNodes(nodes, depth = 0) {
   if (depth > MAX_DEPTH) return "";
-  return nodes.map((node) => {
-    if (node.type === "text") return applyMarks(node.text ?? "", node.marks ?? []);
-    if (node.type === "hardBreak") return "  \n";
-    if (node.type === "mention") {
-      const label = node.attrs?.label ?? node.attrs?.id ?? "";
-      return label ? `@${label}` : "";
+  let out = "";
+  for (let i = 0; i < nodes.length; ) {
+    let best, end = i + 1;
+    for (const m of nodes[i].marks ?? []) {
+      if (!RUN_MARKS.has(m.type)) continue;
+      let j = i + 1;
+      while (j < nodes.length && (nodes[j].marks ?? []).some((x) => sameMark(x, m))) j++;
+      if (!best || j > end) { best = m; end = j; }
     }
-    return inlineNodes(node.content ?? [], depth + 1);
-  }).join("")
-    // Also not on the server: marks are applied per text node, so "**a ****`b`**** c**"
-    // comes out where one bold run is split by a code span. Merge adjacent runs.
-    // ponytail: bold/strike only; adjacent italic runs fail roundTrips() and open read-only.
-    .replace(/\*\*\*\*/g, "").replace(/~~~~/g, "");
+    if (!best) { out += leaf(nodes[i], depth); i++; continue; }
+    const inner = nodes.slice(i, end).map((n) => ({ ...n, marks: (n.marks ?? []).filter((x) => !sameMark(x, best)) }));
+    out += wrapMark(inlineNodes(inner, depth + 1), best);
+    i = end;
+  }
+  return out;
 }
 
-function listToMd(node, listDepth, depth, marker) {
-  const indent = "  ".repeat(Math.min(listDepth, MAX_LIST_INDENT));
-  return (node.content ?? []).map((item, i) => {
-    const children = item.content ?? [];
-    const first = children[0] ? blockToMd(children[0], listDepth, depth + 1).trimEnd() : "";
-    const rest = children.slice(1).map((c) => blockToMd(c, listDepth + 1, depth + 1)).join("");
-    return `${indent}${marker(i, item)}${first}${rest ? "\n" + rest : ""}\n`;
-  }).join("") + "\n";
+// Continuation lines indent by the marker's width (3 under "1. "), capped.
+function listItemToMd(item, marker, depth, padWidth = marker.length) {
+  const body = (item.content ?? []).map((c, i) => {
+    const md = blockToMd(c, depth + 1).trimEnd();
+    return i === 0 ? md : (/List$/.test(c.type) ? "\n" : "\n\n") + md;
+  }).join("");
+  const pad = " ".repeat(padWidth);
+  return marker + body.split("\n").map((l, i) => (i === 0 || !l ? l : (pad + l).replace(/^ +/, (sp) => sp.slice(0, MAX_LIST_INDENT)))).join("\n") + "\n";
 }
 
-function blockToMd(node, listDepth = 0, depth = 0) {
+function blockToMd(node, depth = 0) {
   if (depth > MAX_DEPTH) return "";
   switch (node.type) {
     case "heading": {
@@ -64,16 +74,16 @@ function blockToMd(node, listDepth = 0, depth = 0) {
       const text = inlineNodes(node.content ?? [], depth + 1);
       return text ? `${text}\n\n` : "\n";
     }
-    case "bulletList": return listToMd(node, listDepth, depth, () => "- ");
-    case "orderedList": return listToMd(node, listDepth, depth, (i) => `${i + 1}. `);
-    case "taskList": return listToMd(node, listDepth, depth, (_, item) => `- [${item.attrs?.checked ? "x" : " "}] `);
+    case "bulletList": return (node.content ?? []).map((it) => listItemToMd(it, "- ", depth)).join("") + "\n";
+    case "orderedList": return (node.content ?? []).map((it, i) => listItemToMd(it, `${i + 1}. `, depth)).join("") + "\n";
+    case "taskList": return (node.content ?? []).map((it) => listItemToMd(it, `- [${it.attrs?.checked ? "x" : " "}] `, depth, 2)).join("") + "\n";
     case "blockquote": {
-      const inner = (node.content ?? []).map((c) => blockToMd(c, 0, depth + 1)).join("").trimEnd();
+      const inner = (node.content ?? []).map((c) => blockToMd(c, depth + 1)).join("").trimEnd();
       return inner.split("\n").map((l) => `> ${l}`).join("\n") + "\n\n";
     }
     case "callout": {
       const emoji = node.attrs?.emoji ?? "";
-      const inner = (node.content ?? []).map((c) => blockToMd(c, 0, depth + 1)).join("").trimEnd();
+      const inner = (node.content ?? []).map((c) => blockToMd(c, depth + 1)).join("").trimEnd();
       const lines = inner.split("\n");
       const led = emoji ? [`${emoji} ${lines[0] ?? ""}`.trim(), ...lines.slice(1)] : lines;
       return led.map((l) => `> ${l}`).join("\n") + "\n\n";
@@ -88,13 +98,13 @@ function blockToMd(node, listDepth = 0, depth = 0) {
       const rows = node.content ?? [];
       if (rows.length === 0) return "";
       const cellText = (cell) =>
-        (cell.content ?? []).map((c) => blockToMd(c, 0, depth + 1)).join("").replace(/\n+$/, "").trim();
+        (cell.content ?? []).map((c) => blockToMd(c, depth + 1)).join("").replace(/\n+$/, "").trim();
       const renderRow = (row) => "| " + (row.content ?? []).map(cellText).join(" | ") + " |";
       const sep = "| " + Array((rows[0].content ?? []).length).fill("---").join(" | ") + " |";
       return [renderRow(rows[0]), sep, ...rows.slice(1).map(renderRow)].join("\n") + "\n\n";
     }
     default:
-      return (node.content ?? []).map((c) => blockToMd(c, listDepth, depth + 1)).join("");
+      return (node.content ?? []).map((c) => blockToMd(c, depth + 1)).join("");
   }
 }
 
@@ -172,7 +182,9 @@ function blockTokensToTiptap(tokens) {
 }
 
 function markdownToTiptapJson(markdown) {
-  const stripped = markdown.replace(/^---[\s\S]*?^---\s*/m, "");
+  // Frontmatter only at the very top and only if YAML-like — the server's old /m regex ate
+  // everything between any two horizontal rules.
+  const stripped = markdown.replace(/^---[ \t]*\r?\n(?=[\w-]+[ \t]*:)[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)\s*/, "");
   const content = blockTokensToTiptap(marked.lexer(stripped));
   return { type: "doc", content: content.length > 0 ? content : [{ type: "paragraph" }] };
 }
@@ -209,8 +221,6 @@ function unsafeMarkdown(md) {
   const found = [];
   if (/!\[[^\]]*\]\(/.test(md)) found.push("image");
   if (/^\s*[-*] \[[ xX]\] /m.test(md)) found.push("taskList");
-  // The server's bold+code output (see applyMarks) — its PATCH would add more asterisks.
-  if (/`\*\*[^`\n]*\*\*`/.test(md)) found.push("bold code");
   return found;
 }
 

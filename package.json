@@ -2,7 +2,7 @@
   "name": "notesmith-vscode",
   "displayName": "NoteSmith Notes",
   "description": "Link a NoteSmith folder — or a local-only encrypted vault — to a project and read/write its notes as Markdown inside VS Code.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "varoindustries",
   "repository": { "type": "git", "url": "https://github.com/VAROIndustries/VSCodeNoteSmithPlugin" },
   "license": "MIT",

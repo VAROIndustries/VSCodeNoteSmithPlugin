@@ -28,7 +28,7 @@ The vault's disk path is stored per machine (not in `settings.json`); only the v
 Notes are edited as Markdown and converted back on save. Content Markdown can't carry would be lost, so those notes open **read-only** with a message saying why — edit them in NoteSmith instead:
 
 - task lists, callouts, images/attachments, audio, mentions, highlight/underline/colour marks (vault notes: exact type check)
-- images, task lists, and bold-or-italic code spans (server notes: syntax check — the server's own Markdown export mangles `**` around code, and saving would compound it)
+- images and task lists (server notes: syntax check)
 - anything whose Markdown wouldn't come back identical after a save
 
 Saving a note you didn't change does nothing.
@@ -43,6 +43,6 @@ Saving a note you didn't change does nothing.
 
 Plain JavaScript, no build step. `npm install`, then `node test.js` (builds a vault the way the web app does and round-trips it). Package with `npx @vscode/vsce package`.
 
-The Markdown converters in `markdown.js` are vendored from NoteSmith so vault notes convert exactly like API notes, with two deliberate fixes (code is always the innermost mark; adjacent bold runs are merged).
+The Markdown converters in `markdown.js` are vendored from NoteSmith so vault notes convert exactly like API notes. Keep them in sync when the server's change.
 
 MIT licensed.
