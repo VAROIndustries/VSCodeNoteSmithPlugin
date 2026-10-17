@@ -1,0 +1,65 @@
+{
+  "name": "notesmith-vscode",
+  "displayName": "NoteSmith Notes",
+  "description": "Link a NoteSmith folder — or a local-only encrypted vault — to a project and read/write its notes as Markdown inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "varoindustries",
+  "repository": { "type": "git", "url": "https://github.com/VAROIndustries/VSCodeNoteSmithPlugin" },
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "keywords": ["notesmith", "notes", "markdown", "vault"],
+  "main": "extension.js",
+  "activationEvents": ["onFileSystem:notesmith", "onFileSystem:notesmith-vault"],
+  "contributes": {
+    "views": {
+      "explorer": [{ "id": "notesmith.notes", "name": "NoteSmith" }]
+    },
+    "viewsWelcome": [{
+      "view": "notesmith.notes",
+      "contents": "Link this project to a NoteSmith folder or vault.\n[Set API Key](command:notesmith.setApiKey)\n[Link NoteSmith Folder](command:notesmith.linkFolder)\n[Link Local Vault](command:notesmith.linkVault)"
+    }],
+    "commands": [
+      { "command": "notesmith.setApiKey", "title": "Set API Key", "category": "NoteSmith" },
+      { "command": "notesmith.linkFolder", "title": "Link NoteSmith Folder to Project", "category": "NoteSmith" },
+      { "command": "notesmith.linkVault", "title": "Link Local Vault to Project", "category": "NoteSmith" },
+      { "command": "notesmith.unlockVault", "title": "Unlock Vault", "category": "NoteSmith", "icon": "$(unlock)" },
+      { "command": "notesmith.lockVault", "title": "Lock Vault", "category": "NoteSmith", "icon": "$(lock)" },
+      { "command": "notesmith.unlink", "title": "Unlink Project", "category": "NoteSmith" },
+      { "command": "notesmith.newNote", "title": "New Note", "category": "NoteSmith", "icon": "$(new-file)" },
+      { "command": "notesmith.refresh", "title": "Refresh", "category": "NoteSmith", "icon": "$(refresh)" },
+      { "command": "notesmith.openInBrowser", "title": "Open in NoteSmith", "category": "NoteSmith", "icon": "$(link-external)" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "notesmith.newNote", "when": "view == notesmith.notes", "group": "navigation@1" },
+        { "command": "notesmith.refresh", "when": "view == notesmith.notes", "group": "navigation@2" },
+        { "command": "notesmith.linkFolder", "when": "view == notesmith.notes" },
+        { "command": "notesmith.linkVault", "when": "view == notesmith.notes" },
+        { "command": "notesmith.setApiKey", "when": "view == notesmith.notes" },
+        { "command": "notesmith.unlink", "when": "view == notesmith.notes" }
+      ],
+      "view/item/context": [
+        { "command": "notesmith.newNote", "when": "view == notesmith.notes && viewItem =~ /^(serverRoot|serverFolder|vaultRoot|vaultFolder|vaultDoc)$/", "group": "inline" },
+        { "command": "notesmith.unlockVault", "when": "view == notesmith.notes && viewItem == vaultLocked", "group": "inline" },
+        { "command": "notesmith.lockVault", "when": "view == notesmith.notes && viewItem == vaultRoot", "group": "inline" },
+        { "command": "notesmith.openInBrowser", "when": "view == notesmith.notes && viewItem =~ /^(serverDoc|vaultDoc)$/" }
+      ],
+      "commandPalette": [
+        { "command": "notesmith.openInBrowser", "when": "false" }
+      ]
+    },
+    "configuration": {
+      "title": "NoteSmith",
+      "properties": {
+        "notesmith.apiBase": { "type": "string", "default": "https://notesmith.io", "description": "NoteSmith server URL." },
+        "notesmith.workspaceId": { "type": "string", "scope": "resource", "description": "Linked NoteSmith workspace (set by “Link NoteSmith Folder”)." },
+        "notesmith.folderId": { "type": "string", "scope": "resource", "description": "Linked NoteSmith folder (set by “Link NoteSmith Folder”)." },
+        "notesmith.vaultFolderId": { "type": "string", "scope": "resource", "description": "Linked vault folder (set by “Link Local Vault”). The vault's disk path is stored per machine, not here." },
+        "notesmith.vaultName": { "type": "string", "scope": "resource", "description": "Display name of the linked vault folder." }
+      }
+    }
+  },
+  "scripts": { "test": "node test.js" },
+  "dependencies": { "marked": "^15.0.12" }
+}
