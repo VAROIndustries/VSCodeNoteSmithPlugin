@@ -2,14 +2,18 @@ const vscode = require("vscode");
 const crypto = require("crypto");
 const { Vault } = require("./vault");
 const md = require("./markdown");
+const mcp = require("./mcp");
 
 const SECRET_KEY = "notesmith.apiKey";
+const MCP_TOKEN = "notesmith.mcpToken";
 const VAULT_DIR = "notesmith.vaultDir"; // workspaceState: a disk path is machine-specific, so not a shared setting
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 let ctx;
 let vault = null; // unlocked Vault; the DEK lives only in memory, for this window
+let mcpServer = null;
+const fileChanged = new vscode.EventEmitter();
 const cache = new Map(); // uri -> { text, readonly, mtime, at }
 const warned = new Set(); // uris already told they're read-only
 const tree = { onDidChange: new vscode.EventEmitter() };
@@ -55,17 +59,15 @@ async function load(uri) {
     const d = await api(`/docs/${id}`);
     text = d.content ?? "";
     why = md.unsafeMarkdown(text);
+    if (!why.length && !md.roundTrips(text)) why = ["formatting"];
     mtime = Date.parse(d.updatedAt);
   } else {
     if (!vault) throw vscode.FileSystemError.Unavailable("Vault is locked — run “NoteSmith: Unlock Vault”.");
-    const e = await vault.entry(id);
-    if (!e) throw vscode.FileSystemError.FileNotFound(uri);
-    const content = await vault.loadDoc(id);
-    text = content ? md.tiptapToMarkdown(content) : "";
-    why = content ? md.unsafeTypes(content) : [];
-    mtime = Date.parse(e.updatedAt);
+    const n = await vaultNote(id);
+    if (!n) throw vscode.FileSystemError.FileNotFound(uri);
+    ({ text, why } = n);
+    mtime = Date.parse(n.entry.updatedAt);
   }
-  if (!why.length && !md.roundTrips(text)) why = ["formatting"];
   readonly = why.length > 0;
   if (readonly && !warned.has(uri.toString())) {
     warned.add(uri.toString());
@@ -77,8 +79,27 @@ async function load(uri) {
   return c;
 }
 
+/** Vault note as Markdown, plus why it can't be written back safely (empty = writable). Shared by the editor and MCP. */
+async function vaultNote(id) {
+  const entry = await vault.entry(id);
+  if (!entry) return null;
+  const content = await vault.loadDoc(id);
+  const text = content ? md.tiptapToMarkdown(content) : "";
+  const why = content ? md.unsafeTypes(content) : [];
+  if (!why.length && !md.roundTrips(text)) why.push("formatting");
+  return { entry, text, why };
+}
+
+async function createVaultNote(parentId, title, content) {
+  const entry = {
+    id: crypto.randomUUID(), kind: "doc", vaultFolderId: cfg().get("vaultFolderId"),
+    parentId: parentId ?? null, title, updatedAt: new Date().toISOString(),
+  };
+  return vault.saveDoc(entry, content);
+}
+
 const fsProvider = {
-  onDidChangeFile: new vscode.EventEmitter().event,
+  onDidChangeFile: fileChanged.event,
   watch: () => new vscode.Disposable(() => {}),
   async stat(uri) {
     const c = cache.get(uri.toString()) ?? (await load(uri));
@@ -305,11 +326,7 @@ const commands = {
       uri = docUri("notesmith", d.id, d.title);
     } else {
       if (!vault) throw new Error("Unlock the vault first.");
-      const entry = {
-        id: crypto.randomUUID(), kind: "doc", vaultFolderId: cfg().get("vaultFolderId"),
-        parentId: target.kind === "ventry" ? target.entry.id : null, title, updatedAt: new Date().toISOString(),
-      };
-      await vault.saveDoc(entry, { type: "doc", content: [{ type: "paragraph" }] });
+      const entry = await createVaultNote(target.kind === "ventry" ? target.entry.id : null, title, { type: "doc", content: [{ type: "paragraph" }] });
       uri = docUri("notesmith-vault", entry.id, title);
     }
     tree.onDidChange.fire();
@@ -320,6 +337,15 @@ const commands = {
     folderCache = null;
     cache.clear();
     tree.onDidChange.fire();
+  },
+
+  async copyMcpSetup() {
+    const port = cfg().get("mcpPort");
+    if (!port) throw new Error("Set “notesmith.mcpPort” to a port number to enable the Claude Code bridge.");
+    const cmd = `claude mcp add --transport http --scope user notesmith-vault http://127.0.0.1:${port}/mcp --header "Authorization: Bearer ${await mcpToken()}"`;
+    await vscode.env.clipboard.writeText(cmd);
+    await startMcp();
+    vscode.window.showInformationMessage("Copied the Claude Code setup command. Run it once in a terminal, then restart Claude Code (or /mcp → reconnect).");
   },
 
   openInBrowser(n) {
@@ -343,6 +369,90 @@ async function unlock(dir) {
   return true;
 }
 
+// ------------------------------------------------------------------ MCP bridge
+// The linked vault folder only — a note elsewhere is "not found". Errors are worded for
+// Claude to relay to the user.
+function needVault() {
+  if (!cfg().get("vaultFolderId")) throw new Error("No vault is linked in this VS Code window.");
+  if (!vault) throw new Error("The vault is locked. Ask the user to run “NoteSmith: Unlock Vault” in VS Code.");
+}
+async function linkedNote(id) {
+  const n = await vaultNote(id);
+  if (!n || n.entry.vaultFolderId !== cfg().get("vaultFolderId")) throw new Error(`No note ${id} in the linked vault.`);
+  return n;
+}
+// A tab holding this note must re-read it, or its stale buffer wins on the next save.
+function noteChanged(id) {
+  for (const k of [...cache.keys()]) {
+    const uri = vscode.Uri.parse(k);
+    if (uri.scheme === "notesmith-vault" && idOf(uri) === id) {
+      cache.delete(k);
+      fileChanged.fire([{ type: vscode.FileChangeType.Changed, uri }]);
+    }
+  }
+  tree.onDidChange.fire();
+}
+
+const mcpNotes = {
+  async list() {
+    needVault();
+    const fid = cfg().get("vaultFolderId");
+    return {
+      window: vscode.workspace.name, vault: cfg().get("vaultName"),
+      notes: (await vault.index()).entries.filter((e) => e.vaultFolderId === fid)
+        .map(({ id, title, kind, parentId, updatedAt }) => ({ id, title, kind, parentId: parentId ?? null, updatedAt })),
+    };
+  },
+  async read(id) {
+    needVault();
+    const n = await linkedNote(id);
+    return { id, title: n.entry.title, markdown: n.text, readonly: n.why.length > 0, ...(n.why.length && { readonlyBecause: n.why }) };
+  },
+  async write({ id, title, parentId, markdown }) {
+    needVault();
+    if (!id) {
+      if (!title?.trim()) throw new Error("`title` is required to create a note.");
+      if (parentId) await linkedNote(parentId);
+      const e = await createVaultNote(parentId, title.trim(), md.markdownToTiptapJson(markdown));
+      tree.onDidChange.fire();
+      return { id: e.id, created: true };
+    }
+    const n = await linkedNote(id);
+    if (n.entry.kind === "folder") throw new Error(`${id} is a folder, not a note.`);
+    if (n.why.length) throw new Error(`Read-only: this note has ${n.why.join(", ")} content Markdown can't round-trip. Edit it in NoteSmith.`);
+    if (markdown === n.text) return { id, unchanged: true };
+    await vault.saveDoc(n.entry, md.markdownToTiptapJson(markdown));
+    noteChanged(id);
+    return { id, updated: true };
+  },
+};
+
+async function mcpToken() {
+  let t = await ctx.secrets.get(MCP_TOKEN);
+  if (!t) await ctx.secrets.store(MCP_TOKEN, (t = crypto.randomBytes(32).toString("hex")));
+  return t;
+}
+
+// ponytail: one fixed port per machine, so only the first VS Code window with a linked vault
+// serves; the others warn. Per-window ports would need a per-window `claude mcp add`.
+async function startMcp() {
+  const port = cfg().get("mcpPort");
+  if (mcpServer || !port || !cfg().get("vaultFolderId")) return;
+  try {
+    mcpServer = await mcp.serve(port, await mcpToken(), mcpNotes);
+  } catch (err) {
+    vscode.window.showWarningMessage(err.code === "EADDRINUSE"
+      ? `NoteSmith: port ${port} is already in use (another VS Code window?), so Claude Code can't reach this window's vault.`
+      : `NoteSmith: couldn't start the Claude Code bridge: ${err.message}`);
+  }
+}
+
+function stopMcp() {
+  const s = mcpServer;
+  mcpServer = null;
+  return new Promise((r) => (s ? s.close(() => r()) : r()));
+}
+
 function activate(context) {
   ctx = context;
   const reg = (d) => context.subscriptions.push(d);
@@ -354,7 +464,13 @@ function activate(context) {
       try { await fn(...args); } catch (err) { vscode.window.showErrorMessage(err.message); }
     }));
   }
-  reg(vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration("notesmith") && commands.refresh()));
+  reg(vscode.workspace.onDidChangeConfiguration(async (e) => {
+    if (!e.affectsConfiguration("notesmith")) return;
+    commands.refresh();
+    if (e.affectsConfiguration("notesmith.mcpPort")) await stopMcp();
+    startMcp();
+  }));
+  startMcp();
 }
 
-module.exports = { activate, deactivate() { vault = null; } };
+module.exports = { activate, deactivate() { vault = null; return stopMcp(); } };

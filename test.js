@@ -63,6 +63,36 @@ async function wrap(dek, secret, iters) {
   assert.ok(md.roundTrips("Intro\n\n---\n\nKeep me\n\n---\n\nEnd")); // two rules aren't frontmatter
   assert.ok(md.roundTrips("1. **Item.** text\n   - nested\n2. Next")); // ordered sub-list stays nested
 
+  // MCP bridge over real HTTP: guards first, then the JSON-RPC flow
+  const mcp = require("./mcp");
+  const notes = {
+    list: async () => [{ id: "doc-1" }],
+    read: async (id) => { if (id !== "doc-1") throw new Error("No note"); return { markdown: "x" }; },
+    write: async (a) => ({ id: a.id ?? "new", wrote: a.markdown }),
+  };
+  const srv = await mcp.serve(0, "tok", notes);
+  const port = srv.address().port;
+  const post = (body, headers = {}) => fetch(`http://127.0.0.1:${port}/mcp`, {
+    method: "POST", headers: { Authorization: "Bearer tok", "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
+  });
+  const call = async (id, name, args) => JSON.parse((await (await post({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })).json()).result.content[0].text);
+  assert.strictEqual((await post({}, { Authorization: "Bearer nope" })).status, 401);
+  assert.strictEqual((await post({}, { Origin: "https://evil.example" })).status, 403);
+  // fetch() won't let us forge Host; the server's Host check is exercised by http.request
+  const forged = await new Promise((r) => require("http").request({ port, host: "127.0.0.1", method: "POST", path: "/mcp",
+    headers: { Host: "evil.example", Authorization: "Bearer tok" } }, (res) => r(res.statusCode)).end("{}"));
+  assert.strictEqual(forged, 403);
+  const init = await (await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })).json();
+  assert.strictEqual(init.result.serverInfo.name, "notesmith-vault");
+  assert.strictEqual((await post({ jsonrpc: "2.0", method: "notifications/initialized" })).status, 202);
+  const tools = await (await post({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
+  assert.deepStrictEqual(tools.result.tools.map((t) => t.name), ["list_notes", "read_note", "write_note"]);
+  assert.deepStrictEqual(await call(3, "list_notes", {}), [{ id: "doc-1" }]);
+  assert.deepStrictEqual(await call(4, "write_note", { title: "T", markdown: "# hi" }), { id: "new", wrote: "# hi" });
+  const missing = await (await post({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "read_note", arguments: { id: "zzz" } } })).json();
+  assert.strictEqual(missing.result.isError, true);
+  srv.close();
+
   fs.rmSync(dir, { recursive: true });
   console.log("ok");
 })().catch((e) => { console.error(e); process.exit(1); });

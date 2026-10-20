@@ -2,7 +2,7 @@
   "name": "notesmith-vscode",
   "displayName": "NoteSmith Notes",
   "description": "Link a NoteSmith folder — or a local-only encrypted vault — to a project and read/write its notes as Markdown inside VS Code.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "varoindustries",
   "repository": { "type": "git", "url": "https://github.com/VAROIndustries/VSCodeNoteSmithPlugin" },
   "license": "MIT",
@@ -10,7 +10,7 @@
   "categories": ["Other"],
   "keywords": ["notesmith", "notes", "markdown", "vault"],
   "main": "extension.js",
-  "activationEvents": ["onFileSystem:notesmith", "onFileSystem:notesmith-vault"],
+  "activationEvents": ["onFileSystem:notesmith", "onFileSystem:notesmith-vault", "onStartupFinished"],
   "contributes": {
     "views": {
       "explorer": [{ "id": "notesmith.notes", "name": "NoteSmith" }]
@@ -28,7 +28,8 @@
       { "command": "notesmith.unlink", "title": "Unlink Project", "category": "NoteSmith" },
       { "command": "notesmith.newNote", "title": "New Note", "category": "NoteSmith", "icon": "$(new-file)" },
       { "command": "notesmith.refresh", "title": "Refresh", "category": "NoteSmith", "icon": "$(refresh)" },
-      { "command": "notesmith.openInBrowser", "title": "Open in NoteSmith", "category": "NoteSmith", "icon": "$(link-external)" }
+      { "command": "notesmith.openInBrowser", "title": "Open in NoteSmith", "category": "NoteSmith", "icon": "$(link-external)" },
+      { "command": "notesmith.copyMcpSetup", "title": "Connect Claude Code to Vault (copy setup command)", "category": "NoteSmith" }
     ],
     "menus": {
       "view/title": [
@@ -56,6 +57,7 @@
         "notesmith.workspaceId": { "type": "string", "scope": "resource", "description": "Linked NoteSmith workspace (set by “Link NoteSmith Folder”)." },
         "notesmith.folderId": { "type": "string", "scope": "resource", "description": "Linked NoteSmith folder (set by “Link NoteSmith Folder”)." },
         "notesmith.vaultFolderId": { "type": "string", "scope": "resource", "description": "Linked vault folder (set by “Link Local Vault”). The vault's disk path is stored per machine, not here." },
+        "notesmith.mcpPort": { "type": "number", "default": 47210, "scope": "machine", "description": "Loopback port for the Claude Code bridge to the unlocked vault (127.0.0.1 only, token-protected). 0 turns it off." },
         "notesmith.vaultName": { "type": "string", "scope": "resource", "description": "Display name of the linked vault folder." }
       }
     }
