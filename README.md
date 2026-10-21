@@ -23,16 +23,20 @@ A NoteSmith vault never touches the server — its notes live encrypted in a fol
 
 The vault's disk path is stored per machine (not in `settings.json`); only the vault folder id is shared. A vault only works on a machine that has the vault directory — there's no server copy to fall back to.
 
-## Claude Code can read and write the unlocked vault
+## Copilot and Claude Code can read and write the unlocked vault
 
 When a vault is linked, the extension runs a small MCP server on `127.0.0.1:47210` (`notesmith.mcpPort`, `0` turns it off). Its tools are `list_notes`, `read_note` and `write_note`, and they work only on the linked vault folder, only while it's unlocked in this window.
+
+**GitHub Copilot (VS Code 1.101+):** nothing to set up. The extension registers the server with VS Code as **NoteSmith Vault**, token included, so it appears in Copilot Chat's tool list (agent mode) in the window that's serving. If VS Code asks whether to trust or start it, allow it.
+
+**Claude Code:**
 
 1. Run **NoteSmith: Connect Claude Code to Vault**. A `claude mcp add --scope user …` command goes to your clipboard.
 2. Paste it into a terminal once, then restart Claude Code (or `/mcp` → reconnect).
 
 While the vault is locked, the tools reply "vault is locked" and Claude asks you to unlock it. Notes that open read-only in the editor are read-only for Claude too. If one of Claude's writes changes a note you have open, the tab reloads.
 
-- **Trade-off:** the bearer token is stored in plain text in `~/.claude.json`. While the vault is unlocked, anything on this machine that can read that file can read the vault. Lock it when you're done.
+- **Trade-off (Claude Code only):** the bearer token is stored in plain text in `~/.claude.json`. While the vault is unlocked, anything on this machine that can read that file can read the vault. Lock it when you're done.
 - The port can only be used once per machine. Only the first VS Code window with a linked vault serves it. Other windows show a warning.
 
 ## What opens read-only, and why

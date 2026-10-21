@@ -13,6 +13,7 @@ const dec = new TextDecoder();
 let ctx;
 let vault = null; // unlocked Vault; the DEK lives only in memory, for this window
 let mcpServer = null;
+const mcpDefsChanged = new vscode.EventEmitter(); // tells VS Code (Copilot) the bridge came or went
 const fileChanged = new vscode.EventEmitter();
 const cache = new Map(); // uri -> { text, readonly, mtime, at }
 const warned = new Set(); // uris already told they're read-only
@@ -440,6 +441,7 @@ async function startMcp() {
   if (mcpServer || !port || !cfg().get("vaultFolderId")) return;
   try {
     mcpServer = await mcp.serve(port, await mcpToken(), mcpNotes);
+    mcpDefsChanged.fire();
   } catch (err) {
     vscode.window.showWarningMessage(err.code === "EADDRINUSE"
       ? `NoteSmith: port ${port} is already in use (another VS Code window?), so Claude Code can't reach this window's vault.`
@@ -450,6 +452,7 @@ async function startMcp() {
 function stopMcp() {
   const s = mcpServer;
   mcpServer = null;
+  mcpDefsChanged.fire();
   return new Promise((r) => (s ? s.close(() => r()) : r()));
 }
 
@@ -462,6 +465,21 @@ function activate(context) {
   for (const [name, fn] of Object.entries(commands)) {
     reg(vscode.commands.registerCommand(`notesmith.${name}`, async (...args) => {
       try { await fn(...args); } catch (err) { vscode.window.showErrorMessage(err.message); }
+    }));
+  }
+  // Copilot (and any other VS Code MCP client) picks the bridge up from here, with the token
+  // passed as a header — nothing to paste, and it never lands in a config file. Only the
+  // window that is actually serving offers it. Older VS Code lacks the API; Claude Code's
+  // copied command still works there.
+  if (vscode.lm?.registerMcpServerDefinitionProvider) {
+    reg(vscode.lm.registerMcpServerDefinitionProvider("notesmith.vault", {
+      onDidChangeMcpServerDefinitions: mcpDefsChanged.event,
+      async provideMcpServerDefinitions() {
+        const port = mcpServer?.address()?.port;
+        if (!port) return [];
+        return [new vscode.McpHttpServerDefinition("NoteSmith Vault", vscode.Uri.parse(`http://127.0.0.1:${port}/mcp`),
+          { Authorization: `Bearer ${await mcpToken()}` })];
+      },
     }));
   }
   reg(vscode.workspace.onDidChangeConfiguration(async (e) => {
