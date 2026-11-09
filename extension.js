@@ -173,7 +173,9 @@ const treeProvider = {
       if (n.kind === "sfolder") return serverChildren(n.id);
       if (n.kind === "vault") {
         if (!vault) return [{ kind: "msg", label: "Locked — click to unlock", command: { command: "notesmith.unlockVault", title: "Unlock" } }];
-        return vaultChildren(null);
+        const kids = await vaultChildren(null);
+        if (!kids.length) await notASubfolder();
+        return kids;
       }
       if (n.kind === "ventry") return vaultChildren(n.entry.id);
       return [];
@@ -223,6 +225,13 @@ async function serverChildren(folderId) {
 async function vaultChildren(parentId) {
   const parents = new Set((await vault.index()).entries.map((e) => e.parentId));
   return (await vault.children(cfg().get("vaultFolderId"), parentId)).map((entry) => ({ kind: "ventry", entry, hasKids: parents.has(entry.id) }));
+}
+
+// An agent once "corrected" vaultFolderId to a vault subfolder's id (they look alike in
+// mcpNotes.list) and the vault went silently empty. Say so instead.
+async function notASubfolder() {
+  const e = await vault.entry(cfg().get("vaultFolderId"));
+  if (e) throw new Error(`notesmith.vaultFolderId is the vault subfolder “${e.title}”, not the vault — set it to ${e.vaultFolderId}.`);
 }
 
 // ------------------------------------------------------------------ Commands
@@ -397,6 +406,7 @@ function noteChanged(id) {
 const mcpNotes = {
   async list() {
     needVault();
+    await notASubfolder();
     const fid = cfg().get("vaultFolderId");
     return {
       window: vscode.workspace.name, vault: cfg().get("vaultName"),
